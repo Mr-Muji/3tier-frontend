@@ -36,7 +36,8 @@ jobs:
 
       # 3. 종속성 설치
       - name: 의존성 설치
-        run: npm install             # 엄격한 모드로 npm 설치 (package-lock.json 사용)
+        run: npm install --legacy-peer-deps  # 이 부분이 수정됨
+        # 또는 npm install --force
 
       # 4. 코드 린트 검사 (선택 사항)
       - name: 코드 린트 검사
