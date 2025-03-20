@@ -65,7 +65,7 @@ jobs:
           # Blitz.js 프로젝트에서는 .next/ 디렉토리에 빌드 결과물이 생성됨
           aws s3 sync .next/ s3://$S3_BUCKET/ --delete  # .next/ 디렉토리를 S3 버킷에 동기화
           # 또는 필요한 경우 public/ 디렉토리도 동기화
-          # aws s3 sync public/ s3://$S3_BUCKET/public/ --delete  # 정적 파일이 있는 public/ 디렉토리도 동기화
+          aws s3 sync public/ s3://$S3_BUCKET/public/ --delete  # 정적 파일이 있는 public/ 디렉토리도 동기화
 
       # 8. CloudFront 캐시 무효화 - CDN 캐시를 새로고침하여 배포 즉시 변경사항 반영 (main 브랜치 푸시 시에만)
       - name: CloudFront 캐시 무효화
