@@ -1,0 +1,76 @@
+name: "프론트엔드 CI/CD"
+
+# 워크플로우 트리거 설정
+on:
+  push:
+    branches:
+      - main      # main 브랜치에 푸시될 때 워크플로우 실행
+  pull_request:
+    branches:
+      - main      # main 브랜치로 PR이 생성/업데이트될 때 워크플로우 실행
+
+# 작업 정의
+jobs:
+  build-and-deploy:
+    name: "빌드 및 배포"
+    runs-on: ubuntu-latest   # Ubuntu 최신 버전에서 작업 실행
+    
+    # 환경 변수 설정
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: "ap-northeast-2"  # AWS 리전 (서울)
+      S3_BUCKET: "tier3-frontend-dev"  # S3 버킷 이름 (테라폼에서 생성한 버킷)
+    
+    steps:
+      # 1. 소스 코드 체크아웃
+      - name: 코드 체크아웃
+        uses: actions/checkout@v3
+
+      # 2. Node.js 설정
+      - name: Node.js 설정
+        uses: actions/setup-node@v3
+        with:
+          node-version: '16'   # Node.js 버전 지정
+          cache: 'npm'         # npm 캐시 활성화
+
+      # 3. 종속성 설치
+      - name: 의존성 설치
+        run: npm ci             # 엄격한 모드로 npm 설치 (package-lock.json 사용)
+
+      # 4. 코드 린트 검사 (선택 사항)
+      - name: 코드 린트 검사
+        run: npm run lint
+        continue-on-error: true  # 린트 오류가 있어도 계속 진행
+
+      # 5. 단위 테스트 실행 (선택 사항)
+      - name: 단위 테스트 실행
+        run: npm test
+        continue-on-error: true  # 테스트 실패해도 계속 진행
+
+      # 6. 프로젝트 빌드
+      - name: 프로젝트 빌드
+        run: npm run build
+        # env:
+        #   # 환경 변수 설정 (필요에 따라 추가)
+        #   REACT_APP_API_URL: ${{ secrets.REACT_APP_API_URL || 'https://api.mydairy.my' }}
+
+      # 7. S3에 빌드 파일 업로드 (main 브랜치 푸시 시에만)
+      - name: S3에 배포
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          aws s3 sync build/ s3://$S3_BUCKET/ --delete
+
+      # 8. CloudFront 캐시 무효화 (main 브랜치 푸시 시에만)
+      - name: CloudFront 캐시 무효화
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          # 테라폼 출력에서 CloudFront 배포 ID 가져오기
+          CLOUDFRONT_ID=$(aws cloudfront list-distributions --query "DistributionList.Items[?Aliases.Items[?contains(@, 'mydairy.my')]].Id" --output text)
+          
+          if [ -n "$CLOUDFRONT_ID" ]; then
+            echo "CloudFront 배포 ID: $CLOUDFRONT_ID"
+            aws cloudfront create-invalidation --distribution-id $CLOUDFRONT_ID --paths "/*"
+          else
+            echo "CloudFront 배포 ID를 찾을 수 없습니다."
+          fi
