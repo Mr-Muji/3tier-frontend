@@ -2,7 +2,7 @@ name: "프론트엔드 CI/CD"
 
 # 워크플로우 트리거 설정
 on:
-#   push:
+  push:
     branches:
       - main      # main 브랜치에 푸시될 때 워크플로우 실행
   pull_request:
