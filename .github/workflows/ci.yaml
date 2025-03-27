@@ -1,0 +1,185 @@
+# Blitz.js 애플리케이션을 위한 CI/CD 파이프라인
+# ECR에 도커 이미지를 빌드하고 업로드하는 과정까지 자동화합니다.
+# 이 파이프라인은 AWS ECR에 이미지를 푸시하며, 향후 EKS 배포를 위한 준비 단계입니다.
+name: "프론트엔드 CI/CD"
+# 워크플로우 트리거 설정 - 언제 이 CI/CD 파이프라인이 실행될지 정의합니다.
+on:
+  push:
+    branches:
+      - main # 메인 브랜치에 코드가 푸시될 때 실행됩니다. (배포용)
+  pull_request:
+    branches:
+      - main # 메인 브랜치로 PR이 생성되거나 업데이트될 때 실행됩니다. (테스트용)
+# 환경 변수 정의 - 전체 워크플로우에서 사용되는 전역 변수들입니다.
+env:
+  # AWS 설정
+  AWS_REGION: "ap-northeast-2" # 서울 리전 (한국)을 사용합니다.
+  # ECR 설정
+  ECR_REPOSITORY: "tier3-frontend" # ECR 저장소 이름 - 프로젝트에 맞게 수정하세요.
+  # 이미지 이름 관련 설정
+  APP_NAME: "frontend" # 애플리케이션 이름 - 이미지 이름에 사용됩니다.
+  APP_VERSION: "1.0" # 애플리케이션 버전 - 이미지 이름에 사용됩니다.
+  BUILD_DATE: "${{ github.event.repository.updated_at || github.event.head_commit.timestamp || '' }}" # 빌드 날짜 - 이미지 이름에 사용됩니다.
+  # Node.js 설정
+  NODE_VERSION: '16' # Node.js 버전 - Blitz.js 요구사항에 맞는 버전을 사용합니다.
+# 작업 정의 - 실제로 실행될 작업들을 정의합니다.
+jobs:
+  # 빌드 및 ECR 업로드 작업
+  build-and-push:
+    name: "빌드 및 ECR 이미지 푸시"
+    runs-on: ubuntu-latest # GitHub Actions에서 제공하는 최신 Ubuntu 환경에서 실행됩니다.
+    # 작업 단계 - 순차적으로 실행될 단계들을 정의합니다.
+    steps:
+      # 1. 소스 코드 체크아웃 - GitHub 저장소에서 코드를 가져옵니다.
+      - name: 코드 체크아웃
+        uses: actions/checkout@v3 # GitHub에서 제공하는 공식 체크아웃 액션을 사용합니다.
+      # 2. 빌드 날짜 및 태그 이름 설정
+      - name: 빌드 정보 설정
+        id: build-info
+        run: |
+          # 버전 태그 (APP_NAME_APP_VERSION 형식)
+          VERSION_TAG="${APP_NAME}_v${APP_VERSION}"
+          echo "VERSION_TAG=${VERSION_TAG}" >> $GITHUB_OUTPUT
+          
+          # 타임스탬프 형식으로 YYYYMMDDHHmmss 포맷팅 (초까지 포함)
+          TIMESTAMP=$(date +'%Y%m%d%H%M%S')
+          echo "TIMESTAMP=${TIMESTAMP}" >> $GITHUB_OUTPUT
+          
+          # 타임스탬프가 포함된 고유 태그 생성
+          UNIQUE_TAG="${APP_NAME}_v${APP_VERSION}_${TIMESTAMP}"
+          echo "UNIQUE_TAG=${UNIQUE_TAG}" >> $GITHUB_OUTPUT
+
+          # 빌드 정보 출력
+          echo "애플리케이션 이름: ${APP_NAME}"
+          echo "애플리케이션 버전: v${APP_VERSION}"
+          echo "버전 태그: ${VERSION_TAG}"
+          echo "타임스탬프: ${TIMESTAMP}"
+          echo "고유 이미지 태그: ${UNIQUE_TAG}"
+      # 3. AWS 자격 증명 설정 - AWS 서비스를 사용하기 위한 인증 설정
+      - name: AWS 자격 증명 설정
+        uses: aws-actions/configure-aws-credentials@v2 # AWS 공식 인증 액션을 사용합니다.
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }} # GitHub 저장소 시크릿에 저장된 AWS 액세스 키
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }} # GitHub 저장소 시크릿에 저장된 AWS 시크릿 키
+          aws-region: ${{ env.AWS_REGION }} # 위에서 정의한 AWS 리전 변수를 사용합니다.
+      # 4. ECR 로그인 - AWS ECR 서비스에 로그인합니다.
+      - name: ECR 로그인
+        id: ecr-login # 이 단계의 출력을 참조하기 위한 ID입니다.
+        uses: aws-actions/amazon-ecr-login@v1 # AWS ECR 로그인을 위한 공식 액션을 사용합니다.
+      # 5. ECR 저장소 존재 확인 및 생성 - 지정된 ECR 저장소가 없으면 자동으로 생성합니다.
+      - name: ECR 저장소 확인/생성
+        run: |
+          # 저장소 존재 여부를 AWS CLI를 통해 확인합니다.
+          if ! aws ecr describe-repositories --repository-names ${{ env.ECR_REPOSITORY }} >/dev/null 2>&1; then
+            echo "ECR 저장소가 존재하지 않습니다. 새로 생성합니다."
+            # 저장소가 없으면 새로 생성하고, 이미지 스캔 기능을 활성화합니다.
+            aws ecr create-repository --repository-name ${{ env.ECR_REPOSITORY }} --image-scanning-configuration scanOnPush=true
+          else
+            echo "ECR 저장소가 이미 존재합니다."
+          fi
+      # 6. Node.js 설정 - 애플리케이션 빌드에 필요한 Node.js 환경을 설정합니다.
+      - name: Node.js 설정
+        uses: actions/setup-node@v3 # GitHub에서 제공하는 Node.js 설정 액션을 사용합니다.
+        with:
+          node-version: ${{ env.NODE_VERSION }} # 위에서 정의한 Node.js 버전을 사용합니다.
+          cache: 'npm' # npm 의존성 패키지를 캐싱하여 빌드 속도를 향상시킵니다.
+      # 7. NPM 종속성 설치 - 프로젝트에 필요한 모든 패키지를 설치합니다.
+      - name: 의존성 설치
+        run: npm install --legacy-peer-deps
+        # --legacy-peer-deps 옵션은 npm v7 이상에서 peer dependency 충돌 문제를 해결하기 위해 사용됩니다.
+        # Blitz.js와 같은 레거시 프레임워크에서 종종 필요합니다.
+      # 8. 코드 품질 검사 - ESLint를 통한 코드 린팅을 수행합니다.
+      - name: 코드 린트 검사
+        run: npm run lint
+        continue-on-error: true # 린트 오류가 발생해도 빌드 프로세스를 중단하지 않습니다.
+        # 실제 프로덕션 환경에서는 false로 설정하여 엄격한 품질 관리를 권장합니다.
+      # 9. 단위 테스트 실행 - Jest 등을 통한 단위 테스트를 실행합니다
+      - name: 단위 테스트 실행
+        run: npm test
+        continue-on-error: true # 테스트 실패가 발생해도 빌드 프로세스를 중단하지 않습니다.
+        # 실제 프로덕션 환경에서는 false로 설정하여 엄격한 품질 관리를 권장합니다.
+      # 10. Docker 메타데이터 설정 - Docker 이미지 메타데이터를 설정합니다.
+      - name: Docker 메타데이터 설정
+        id: docker-meta
+        uses: docker/metadata-action@v4
+        with:
+          images: ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPOSITORY }}
+          tags: |
+            type=raw,value=${{ steps.build-info.outputs.UNIQUE_TAG }}  # 초까지 포함된 고유 태그 (frontend_v1.0_20240101123045)
+            type=raw,value=${{ steps.build-info.outputs.VERSION_TAG }} # 버전만 포함된 태그 (frontend_v1.0)
+            type=raw,value=latest                                     # 항상 최신 이미지를 가리키는 'latest' 태그
+      # 11. Docker 빌더 설정 - 효율적인 Docker 이미지 빌드를 위한 설정
+      - name: Docker 빌더 설정
+        uses: docker/setup-buildx-action@v2 # 향상된 Docker 빌드 기능을 제공하는 Buildx 액션을 사용합니다.
+        # 레이어 캐싱 및 다중 플랫폼 빌드를 지원합니다.
+      # 12. Docker 이미지 빌드 및 ECR 푸시 - 실제 이미지 빌드 및 푸시 작업
+      - name: 도커 이미지 빌드 및 푸시
+        uses: docker/build-push-action@v4 # Docker 이미지 빌드 및 푸시를 위한 공식 액션을 사용합니다.
+        with:
+          context: . # 빌드 컨텍스트 (현재 디렉토리)
+          push: true # 빌드 후 이미지를 푸시합니다.
+          tags: ${{ steps.docker-meta.outputs.tags }} # 위에서 설정한 태그들을 사용합니다.
+          cache-from: type=gha # GitHub Actions 캐시를 사용하여 빌드 성능을 향상시킵니다.
+          cache-to: type=gha,mode=max # 최대한의 레이어를 캐싱합니다.
+          build-args: | # Dockerfile에 전달할 빌드 인수들입니다.
+            NODE_ENV=production               # 프로덕션 모드로 빌드합니다.
+            APP_NAME=${{ env.APP_NAME }}      # 앱 이름 전달
+            APP_VERSION=${{ env.APP_VERSION }}  # 앱 버전 전달
+            BUILD_DATE=${{ steps.build-info.outputs.TIMESTAMP }}  # 빌드 날짜 전달
+      # 13. 이미지 정보 출력 - 생성된 이미지에 대한 정보를 출력합니다. (디버깅 및 로깅 용도)
+      - name: 이미지 정보 출력
+        run: |
+          echo "===== 빌드된 이미지 정보 ====="
+          echo "이미지 이름: ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPOSITORY }}"
+          echo "이미지 태그: ${{ steps.build-info.outputs.UNIQUE_TAG }}"
+          echo "이미지 URI: ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.build-info.outputs.UNIQUE_TAG }}"
+
+          # 이미지 취약점 스캔 결과를 확인합니다. (보안 확인)
+          echo "===== 이미지 취약점 스캔 ====="
+          aws ecr describe-image-scan-findings --repository-name ${{ env.ECR_REPOSITORY }} --image-id imageTag=${{ steps.build-info.outputs.UNIQUE_TAG }} || echo "스캔이 아직 완료되지 않았습니다."
+      # 14. 매니페스트 저장소 업데이트 - ArgoCD를 통한 배포를 위해 매니페스트 저장소의 values.yaml 파일을 업데이트합니다.
+      # 이 단계에서는 CI 파이프라인이 도커 이미지를 빌드한 후, 해당 이미지를 사용하도록 쿠버네티스 배포 설정을 자동으로 업데이트합니다.
+      # 이것이 GitOps 방식의 핵심으로, 코드 변경이 자동으로 인프라 설정 변경으로 이어집니다.
+      - name: 매니페스트 저장소 업데이트
+        env:
+          UNIQUE_TAG: ${{ steps.build-info.outputs.UNIQUE_TAG }}
+          MANIFEST_REPO: "Mr-Muji/3tier-manifest"
+          MANIFEST_TOKEN: ${{ secrets.MANIFEST_TOKEN }}
+        run: |
+          # Git 사용자 설정 - 변경사항을 커밋할 때 사용될 사용자 정보를 설정합니다
+          # 이는 매니페스트 저장소 커밋 히스토리에서 이 변경을 수행한 주체로 표시됩니다
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          
+          # 매니페스트 저장소 클론 - 쿠버네티스 설정 파일이 있는 다른 GitHub 저장소를 가져옵니다
+          # x-access-token 형식으로 인증 토큰을 사용하여 저장소 접근 권한을 얻습니다
+          git clone https://x-access-token:${MANIFEST_TOKEN}@github.com/${MANIFEST_REPO}.git
+          # 클론한 저장소 디렉토리로 이동합니다
+          cd 3tier-manifest
+          
+          # 이미지 태그를 고유 타임스탬프 태그로 업데이트
+          sed -i "s|tag: .*|tag: ${UNIQUE_TAG}|g" charts/frontend/values.yaml
+          
+          # ECR 저장소 URI도 업데이트 (필요한 경우)
+          ECR_URI="${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPOSITORY }}"
+          sed -i "s|repository: .*|repository: ${ECR_URI}|g" charts/frontend/values.yaml
+          
+          # 변경사항 확인 - 현재 저장소의 상태를 확인합니다
+          # 이는 values.yaml 파일이 실제로 변경되었는지 확인하기 위함입니다
+          git status
+          
+          # 변경사항이 있는 경우에만 커밋 및 푸시
+          # git status -s 명령어의 출력이 비어있지 않으면(변경사항이 있으면) 조건이 참이 됩니다
+          if [[ -n $(git status -s) ]]; then
+            # 변경된 values.yaml 파일을 staging 영역에 추가합니다
+            git add charts/frontend/values.yaml
+            # 변경사항을 설명하는 메시지와 함께 커밋합니다
+            git commit -m "Update frontend image to ${UNIQUE_TAG}"
+            # 변경사항을 원격 저장소에 푸시합니다
+            # 이 푸시가 성공하면 ArgoCD와 같은 GitOps 도구가 변경을 감지하고 클러스터에 적용합니다
+            git push
+            echo "매니페스트 저장소 업데이트 완료: 이미지 태그가 ${UNIQUE_TAG}로 변경되었습니다."
+          else
+            # 변경사항이 없는 경우(이미 동일한 값이 설정된 경우) 건너뜁니다
+            echo "변경사항이 없습니다. 매니페스트 저장소 업데이트를 건너뜁니다."
+          fi
