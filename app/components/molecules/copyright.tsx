@@ -1,13 +1,8 @@
-import Copyright from "../atoms/copyright";
-import Box from "@material-ui/core/Box";
 import React from "react";
 
 const CopyrightComponent = () => {
-  return (
-    <Box mt={8}>
-      <Copyright title={"Copyright © Arai & Umakatsu 2021"} />
-    </Box>
-  );
+  // Copyright 컴포넌트가 아무것도 표시하지 않도록 수정
+  return null;
 };
 
 export default CopyrightComponent;
